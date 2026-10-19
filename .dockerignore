@@ -1,0 +1,25 @@
+# Keep the image to the source only: everything generated is re-created during
+# docker build (the engine, the Python environment) or on the /data volume
+# (models, packs, configs).
+.git
+
+# local Python environment (rebuilt in the image)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# maya.py outputs and downloads (engine, vision build, packs, models, configs, logs)
+/build/
+/build-vision/
+/models/
+/Maya-data/
+third_party/llama.cpp/
+third_party/*.zip
+*.done
+*.log
+maya-*.json
+run-maya-*.sh
+run-maya-*.bat
+maya-report.txt
+vision-memory.json

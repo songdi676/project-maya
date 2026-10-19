@@ -94,6 +94,8 @@ builds everything once (20-40 minutes plus the download) and **starts the model*
 `http://127.0.0.1:8080`. Ctrl+C stops it, and `./setup.sh` starts it again right away.
 
 - **Windows:** `START-MAYA.bat` instead of `./setup.sh` - see [docs/WINDOWS.md](docs/WINDOWS.md).
+- **Docker (Linux):** `docker build -t maya .`, then `docker run --gpus all ...` - the engine is compiled
+  into the image, the model lives in a volume: [docs/SETUP.md](docs/SETUP.md#docker-linux).
 - **AMD:** [docs/AMD_MAYA.md](docs/AMD_MAYA.md).
 - **Updating:** the dashboard's **About > Update**, or `git pull` then `./setup.sh`. The model isn't downloaded again.
 - **Every option** (GPUs, context, a model folder you already have, remote access, ...): [docs/SETUP.md](docs/SETUP.md).

@@ -43,6 +43,44 @@ downloads the new code (git), compiles only the engine files that changed and lo
 is not downloaded again, and your settings stay. By hand: `git pull`, then `./setup.sh`.
 (The check asks GitHub for the latest release, at most every six hours; `MAYA_UPDATE_CHECK=0` turns it off.)
 
+## Docker (Linux)
+
+The same idea, in a container (NVIDIA cards).
+
+1. Host: Docker with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+   and a driver **580 or newer** (CUDA 13.0).
+2. Build (this compiles the engine into the image, so the container never compiles):
+   `docker build -t maya .`
+   `docker build -t maya --build-arg CUDA_ARCHITECTURES=89 .` builds for one card only (faster).
+   The default covers RTX 20 (75), A-series (80), RTX 30 (86), RTX 40 (89) and RTX 50 (120); a card
+   outside that set needs a rebuild with its own arch. The image's CUDA 13 cannot build for the V100
+   (sm_70) - a V100 host runs the native install above with CUDA 12.x. Add `--build-arg BUILD_VISION=0`
+   to skip the image encoder.
+3. Run (the first start downloads the model - 95-160 GB by quant - builds the pack and starts; later
+   starts go straight to serving):
+
+   ```sh
+   docker run --rm --gpus all -p 8080:8080 --ulimit memlock=-1 --stop-timeout 60 \
+     -v maya-data:/data -e MODEL=Maya-S24 maya
+   ```
+
+   The setup choices are env vars: `-e MODEL=Maya-S24` (`Maya-S-v2-IQ2_XXS` (the default) | `Maya-S24`
+   | `Maya-M` | `Maya-M-Derisked` | `Maya-L` | `EXL3-3.05bpw`), `-e CONTEXT=32768`, `-e VISION=no`,
+   `-e DRAFT=dflash2`, `-e GPU=0` or `-e GPUS=0,1` (the layer split), `-e GGUF_DIR=/models` (GGUF files
+   you already have, mounted), `-e RAM_HEADROOM_GB=16`, `-e HOST`, `-e PORT`, `-e API_KEY`.
+   Only the model files, the pack, the vision files and the install config live in the `maya-data`
+   volume; the engine is part of the image. Switching between models already on the volume needs no
+   setup pass: `-e MODEL=Maya-M` picks that model's config. Add `-e REINSTALL=1` only to change
+   settings for a model already set up (context, vision, host, api_key, GPUs, draft). `MODEL` selects
+   `/data/config/maya-<model>.json` (the model name in lowercase); `-e CONFIG=/data/config/my.json`
+   overrides it with any config file.
+   Maya pins most of the free RAM for its expert tier, and inside a container it measures the **host's**
+   RAM, not the container's limit: a memory-capped container names its own headroom with
+   `-e RAM_HEADROOM_GB`. Add an API key before exposing the port to a network: `-e API_KEY=<secret>`.
+4. `docker stop` gives the server 10 seconds by default; a request in progress gets longer to close and
+   answer: `docker run --stop-timeout 60 ...`, `docker stop -t 60 <name>`, or
+   `stop_grace_period: 60s` in Compose.
+
 ## Options
 
 | Option | |
