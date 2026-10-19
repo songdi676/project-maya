@@ -53,6 +53,15 @@ class HipSetupTests(unittest.TestCase):
         self.assertEqual(pc["gpus"], [self.gpus[1]])
         self.assertEqual(maya.EXE, self.root / "build-hip/strata")
 
+    def test_rdna2_is_experimental_and_compiled_only_when_chosen(self):
+        pc = maya.check_pc(self.a)      # the RX 7900 XT: the three architectures, as before
+        self.assertEqual(pc["archs"], list(maya.HIP_ARCHS))
+        self.gpus.append({"index": 3, "arch": "gfx1030", "vendor": "amd", "name": "Radeon PRO V620", "vram_gb": 32})
+        self.a.gpu = 3
+        pc = maya.check_pc(self.a)
+        self.assertEqual(pc["gpus"], [self.gpus[3]])
+        self.assertEqual(pc["archs"], list(maya.HIP_ARCHS) + ["gfx1030"])
+
     def test_rejects_unsupported_card_and_bad_gpu_lists(self):
         self.a.gpu = 2
         with self.assertRaises(SystemExit):
@@ -98,6 +107,7 @@ class HipSetupTests(unittest.TestCase):
         tables.mkdir(parents=True)
         (tables / "gfx1100-glm-hipblaslt-100202.txt").write_text("STRATA_HIPBLASLT_TUNING_V1 gfx1100 100202\n")
         (tables / "gfx1201-glm-hipblaslt-100202.txt").write_text("STRATA_HIPBLASLT_TUNING_V1 gfx1201 100202\n")
+        (tables / "gfx1100-glm-hipblaslt-100401.txt").write_text("STRATA_HIPBLASLT_TUNING_V1 gfx1100 100401\n")
         pc = maya.check_pc(self.a)
         self.a.env = ["STRATA_GLM_PREFILL_SUB=512"]
         p = maya.write_config(self.a, pc, {"lib_dirs": [str(self.rocm / "lib")]},
@@ -108,14 +118,27 @@ class HipSetupTests(unittest.TestCase):
         self.assertEqual(env["STRATA_GLM_PREFILL_MB"], "4096")
         self.assertEqual(env["STRATA_GLM_RESERVE_MB"], "3072")
         self.assertEqual(env["STRATA_GLM_RAM_HEADROOM_GB"], "16")
-        self.assertEqual(env["STRATA_HIPBLASLT_TUNING"], str(tables / "gfx1100-glm-hipblaslt-100202.txt"))
+        self.assertEqual(env["STRATA_HIPBLASLT_TUNING"].split(":"),
+                         [str(tables / "gfx1100-glm-hipblaslt-100202.txt"),
+                          str(tables / "gfx1100-glm-hipblaslt-100401.txt")])
+        # Keep the runtime's exact-version choice; an explicit operator table still wins.
+        self.a.env.append("STRATA_HIPBLASLT_TUNING=/selected/table.txt")
+        p = maya.write_config(self.a, pc, {"lib_dirs": [str(self.rocm / "lib")]},
+                              self.root / "pack", "test", 8192, self.root / "data", None)
+        self.assertEqual(json.loads(p.read_text())["env"]["STRATA_HIPBLASLT_TUNING"], "/selected/table.txt")
 
-    def test_gpus_with_an_apu_is_rejected(self):
-        self.gpus.append({"index": 3, "arch": "gfx1151", "vendor": "amd", "name": "Radeon 8060S", "vram_gb": 4})
+    def test_gpus_with_an_apu_use_discrete_first_and_sequential_loading(self):
+        self.gpus.append({"index": 3, "arch": "gfx1151", "vendor": "amd", "name": "Radeon 8060S", "vram_gb": 112})
         self.a.gpu = None
-        self.a.gpus = "1,3"
-        with self.assertRaises(SystemExit):
-            maya.check_pc(self.a)
+        for order in ("1,3", "3,1"):
+            self.a.gpus = order
+            pc = maya.check_pc(self.a)
+            self.assertEqual(pc["gpus"], [self.gpus[1], self.gpus[3]])
+            p = maya.write_config(self.a, pc, {}, self.root / "pack", "test", 8192, self.root / "data", None)
+            cfg = json.loads(p.read_text())
+            self.assertEqual(cfg["gpu"], [1, 3])
+            self.assertEqual(cfg["env"]["STRATA_GLM_PARALLEL_LOAD"], "0")
+            self.assertNotIn("STRATA_GLM_SPLIT", cfg["env"])
         self.a.gpus = None
         self.a.gpu = 3
         self.assertEqual(maya.check_pc(self.a)["gpus"], [self.gpus[3]])
@@ -419,6 +442,22 @@ class HipSetupTests(unittest.TestCase):
                 patch.object(maya, "bench", side_effect=AssertionError("must not start the CUDA engine")):
             with self.assertRaises(SystemExit):
                 maya.main()
+
+    def first_run_backend(self, nvidia, amd):
+        with patch.object(maya, "configs", return_value=[]), \
+                patch.dict(os.environ, MAYA_SH="1"), \
+                patch.object(sys, "argv", ["maya.py", "--check"]), \
+                patch.object(maya.S, "gpus", return_value=nvidia), \
+                patch.object(maya.S, "amd_gpus", return_value=amd), \
+                patch.object(maya, "check_pc", return_value={"gpus": [{"index": 0}]}) as check:
+            self.assertEqual(maya.main(), 0)
+        return check.call_args.args[0].backend
+
+    def test_first_run_without_backend_picks_hip_on_an_amd_only_pc(self):
+        strix = {"index": 0, "arch": "gfx1151", "vendor": "amd", "name": "Radeon 8060S", "vram_gb": 96}
+        self.assertEqual(self.first_run_backend([], [strix]), "hip")
+        self.assertEqual(self.first_run_backend([], [self.gpus[2]]), "cuda")   # (unsupported iGPU: CUDA's message)
+        self.assertEqual(self.first_run_backend([{"index": 0, "arch": "70"}], [strix]), "cuda")
 
 
 class ConfigsTests(unittest.TestCase):
